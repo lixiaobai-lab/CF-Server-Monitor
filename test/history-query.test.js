@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Miniflare } from 'miniflare';
+import { getNextServerHistoryPartitionId } from '../src/database/indexOptimization.js';
+import { clearServersListCache, getAllServers } from '../src/utils/cache.js';
 
 import {
   buildSparseHistoryQuery,
@@ -12,6 +14,30 @@ import {
 } from '../src/utils/settings.js';
 
 const TEST_SAMPLE_POINTS = DEFAULT_LONG_HISTORY_POINTS;
+
+test('history partition allocation includes inserts newer than the server-list cache', async () => {
+  const miniflare = new Miniflare({
+    modules: true,
+    script: 'export default { fetch() { return new Response("OK"); } }',
+    d1Databases: { DB: 'history-allocation-test' }
+  });
+  clearServersListCache();
+  try {
+    const db = await miniflare.getD1Database('DB');
+    await db.prepare(`CREATE TABLE servers (
+      id TEXT PRIMARY KEY, history_partition_id INTEGER,
+      sort_order INTEGER DEFAULT 0, is_hidden INTEGER DEFAULT 0
+    )`).run();
+    await db.prepare("INSERT INTO servers (id, history_partition_id) VALUES ('first', 1)").run();
+    assert.equal((await getAllServers(db, true)).length, 1);
+    // Another Worker isolate can add a server without invalidating this cache.
+    await db.prepare("INSERT INTO servers (id, history_partition_id) VALUES ('second', 2)").run();
+    assert.equal(await getNextServerHistoryPartitionId(db), 3);
+  } finally {
+    clearServersListCache();
+    await miniflare.dispose();
+  }
+});
 
 test('long-history point settings only accept supported values', () => {
   assert.equal(normalizeLongHistoryPoints(30), String(DEFAULT_LONG_HISTORY_POINTS));

@@ -82,7 +82,10 @@ export async function ensureServerOptimization(db) {
 
 // 获取下一个可用的历史记录分区ID
 export async function getNextServerHistoryPartitionId(db) {
-  const servers = await getAllServers(db, true);
+  // Other Worker isolates can add servers while this isolate's list is cached.
+  const { results: servers = [] } = await db.prepare(
+    'SELECT history_partition_id FROM servers'
+  ).all();
   const usedIds = new Set(
     servers
       .map(s => Number(s.history_partition_id))
